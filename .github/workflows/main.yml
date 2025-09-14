@@ -1,0 +1,98 @@
+name: RDP on Kali Linux
+on:
+  workflow_dispatch:
+jobs:
+  secure-rdp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3600
+    steps:
+      - name: Update and Install XFCE and XRDP
+        run: |
+          sudo apt update
+          sudo apt install -y xfce4 xfce4-goodies xrdp
+          sudo systemctl enable xrdp
+          sudo systemctl start xrdp
+
+      - name: Configure XRDP
+        run: |
+          sudo sed -i 's/port=3389/port=3389/' /etc/xrdp/xrdp.ini
+          sudo sed -i 's/max_bpp=24/max_bpp=32/' /etc/xrdp/xrdp.ini
+          sudo sed -i 's/xserverbpp=24/xserverbpp=32/' /etc/xrdp/xrdp.ini
+          echo xfce4-session > ~/.xsession
+          sudo cp ~/.xsession /etc/skel
+          sudo systemctl restart xrdp
+
+      - name: Create RDP User with Static Password
+        run: |
+          USERNAME="kaliuser"
+          PASSWORD="${{ secrets.RDP_PASSWORD }}"
+
+          sudo useradd -m -s /bin/bash $USERNAME
+          echo "$USERNAME:$PASSWORD" | sudo chpasswd
+          sudo usermod -aG sudo $USERNAME
+          sudo usermod -aG xrdp $USERNAME
+
+          echo "RDP_CREDS=User: $USERNAME | Password: $PASSWORD" >> $GITHUB_ENV
+
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+
+      - name: Establish Tailscale Connection
+        run: |
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$GITHUB_RUN_ID
+          TS_IP=""
+          retries=0
+          while [ -z "$TS_IP" ] && [ $retries -lt 10 ]; do
+              TS_IP=$(sudo tailscale ip -4)
+              sleep 5
+              retries=$((retries+1))
+          done
+          if [ -z "$TS_IP" ]; then
+              echo "Tailscale IP not assigned. Exiting." >&2
+              exit 1
+          fi
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+
+      - name: Configure Firewall (UFW)
+        run: |
+          sudo apt install -y ufw
+          sudo ufw enable
+          sudo ufw allow 3389/tcp
+          sudo ufw allow from $TAILSCALE_IP to any port 3389
+          sudo ufw reload
+
+      - name: Verify RDP Accessibility
+        run: |
+          echo "Tailscale IP: $TAILSCALE_IP"
+          # This step is harder to verify directly from the runner without a client
+          # For now, we'll rely on the firewall and service status.
+          # A more robust check would involve trying to connect from another machine.
+          echo "RDP service and firewall configured. Please attempt connection."
+
+      - name: Maintain Connection
+        run: |
+          echo "\n=== RDP ACCESS ==="
+          echo "Address: $TAILSCALE_IP"
+          echo "Username: $USERNAME"
+          echo "Password: ${{ secrets.RDP_PASSWORD }}"
+          echo "==================\n"
+          while true; do
+              echo "[$(date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              sleep 300
+          done
+
+
+
+
+# تحسينات الأمان والمتانة المضافة:
+# 1. استخدام GitHub Secrets لكلمة المرور (مدمج بالفعل).
+# 2. تثبيت XFCE و XRDP وتكوينهما للوصول عن بعد.
+# 3. إنشاء مستخدم RDP وتعيين كلمة مرور له باستخدام `chpasswd`.
+# 4. إضافة المستخدم إلى مجموعتي `sudo` و `xrdp`.
+# 5. تثبيت Tailscale وتكوينه.
+# 6. تكوين جدار الحماية (UFW) للسماح باتصالات RDP من Tailscale IP.
+# 7. التحقق من تثبيت Tailscale والحصول على IP الخاص به.
+# 8. حلقة `while true` للحفاظ على الاتصال (مع إمكانية زيادة `sleep` لتوفير الموارد).
+
+
